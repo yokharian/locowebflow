@@ -2,7 +2,7 @@
 
 **Loconotion** is a Python script that parses a [Notion.so](https://notion.so) public page (alongside all of its subpages) and generates a lightweight, customizable static site. 
 
-⚠️ *Note*: The project is currently functional but unmantained and might not be up to date with Notion's latest site structure. Issues will likely not be resolved by me and pull requests are welcome, but you might want to look into alternative projects such as [Notion Snapshot](https://github.com/sueszli/notionSnapshot).
+⚠️ *Note*: The project is currently functional but unmaintained and might not be up to date with Notion's latest site structure. Issues will likely not be resolved by me and pull requests are welcome, but you might want to look into alternative projects such as [Notion Snapshot](https://github.com/sueszli/notionSnapshot).
 
 ## But Why?
 
@@ -10,7 +10,7 @@
 
 Some services like Super, HostingPotion, HostNotion and Fruition try to work around this issue by relying on a [clever hack](https://gist.github.com/mayneyao/b9fefc9625b76f70488e5d8c2a99315d) using CloudFlare workers. This solution, however, has some disadvantages:
 
-- **Not free** - Super, HostingPotion and HostNotion all take a monthly fee since they manage all the "hacky bits" for you; Fruition is open-source, but any domain with a decent amount of daily visits will soon clash against CloudFlare's free tier limitations, and force you to upgrade to the 5$ or more plan (plus you need to setup Cloudflare yourself)
+- **Not free** - Super, HostingPotion and HostNotion all take a monthly fee since they manage all the "hacky bits" for you; Fruition is open-source, but any domain with a decent amount of daily visits will soon clash against CloudFlare's free tier limitations, and force you to upgrade to the 5$ or more plan (plus you need to set up Cloudflare yourself)
 - **Slow-ish** - As the page is still hosted on Notion, it comes bundled with all their analytics, editing / collaboration javascript, vendors css, and more bloat which causes the page to load at speeds that are not exactly appropriate for a simple blog / website. Running [example page](https://www.notion.so/The-perfect-It-s-Always-Sunny-in-Philadelphia-episode-d08aaec2b24946408e8be0e9f2ae857e) on Google's [PageSpeed Insights](https://developers.google.com/speed/pagespeed/insights/) scores a measly **24 - 66** on mobile / desktop.
 - **Ugly URLs** - While the services above enable the use of custom domains, the URLs for individual pages are stuck with the long, ugly, original Notion URL (apart from Fruition - they got custom URLs figured out, although you will always see the original URL flashing for an instant when the page is loaded).
 - **Notion Free Account Limitations** - Recently Notion introduced a change to its pricing model where public pages can't be set to be indexed by search engines on a free account (but they also removed the blocks count limitations, which is a good trade-off if you ask me)
@@ -43,7 +43,7 @@ Everything else should be fine. Loconotion re-implements the logic on the client
 
 On top of that, it defines some additional CSS rules to enable mobile responsiveness across the whole site (in some cases, looking even better than Notion's defaults - it wasn't exactly thought for mobile).
 
-### But Notion already had an html export function?
+### But Notion already had a html export function?
 
 It does, but I wasn't really happy with the styling - the pages looked a bit uglier than what they look like on a live Notion page. Plus, it doesn't support all the cool customization features outlined above!
 
@@ -59,7 +59,7 @@ Make sure you're in your virtual environment of choice, then run
 - `poetry install --no-dev` if you have [Poetry](https://python-poetry.org/) installed
 - `pip install -r requirements.txt` otherwise
 
-This script uses [ChromeDriver](chromedriver.chromium.org) to automate the Google Chrome browser - therefore Google Chrome needs to be installed in order to work.
+This script uses [ChromeDriver](https://developer.chrome.com/docs/chromedriver/) to automate the Google Chrome browser - therefore Google Chrome needs to be installed in order to work.
 
 The script will automatically try to download and use the appropriate chromedriver distribution for your OS and Chrome version. If this doesn't work, download the right version for you from https://chromedriver.chromium.org/downloads and use the `--chromedriver` argument to specify its path at runtime.
 
@@ -235,7 +235,7 @@ On top of this, the script can take these optional arguments:
 
 - [ ] Customizable navbar breadcrumbs
 - [ ] Dark / light theme toggle
-- [ ] Automated deployements (e.g. Netlify / GitHub pages / Vercel / etc.)
+- [ ] Automated deployments (e.g. Netlify / GitHub pages / Vercel / etc.)
 - [ ] Injectable custom HTML
 - [ ] HTML / CSS / JS minification & images optimization
 - [ ] More advanced custom theming
@@ -249,4 +249,4 @@ If you used Loconotion to build a cool site and want it added to the list above,
 
 ## Support [![Buy me a coffee](https://img.shields.io/badge/-buy%20me%20a%20coffee-lightgrey?style=flat&logo=buy-me-a-coffee&color=FF813F&logoColor=white "Buy me a coffee")](https://www.buymeacoffee.com/leoncvlt)
 
-If you found this useful, consider [buying me a coffee](https://www.buymeacoffee.com/leoncvlt) so I get a a nice dose of methilxanthine, and you get a nice dose of karma.
+If you found this useful, consider [buying me a coffee,](https://www.buymeacoffee.com/leoncvlt) so I get a nice dose of methilxanthine, and you get a nice dose of karma.

@@ -42,7 +42,7 @@ class notion_page_loaded(object):
 class toggle_block_has_opened(object):
     """An expectation for checking that a notion toggle block has been opened.
   It does so by checking if the div hosting the content has enough children,
-  and the abscence of the loading spinner."""
+  and the absence of the loading spinner."""
 
     def __init__(self, toggle_block):
         self.toggle_block = toggle_block

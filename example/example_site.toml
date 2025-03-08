@@ -25,7 +25,7 @@ page = "https://www.notion.so/Loconotion-Example-Page-03c403f4fdc94cc1b315b9469a
   content = "A static site generated from a Notion.so page using Loconotion"
 
   ## Custom Fonts ##
-  # you can specify the name of a google font to use on the site - use the font embed name
+  # you can specify the name of a Google font to use on the site - use the font embed name
   # if in doubt select a style on fonts.google.com and navigate to the "embed" tag to 
   # check the name under CSS rules
   # the following table keys controls the font of specific elements:
@@ -60,7 +60,7 @@ page = "https://www.notion.so/Loconotion-Example-Page-03c403f4fdc94cc1b315b9469a
   type="image/png"
   href="/example/favicon-16x16.png"
   
-  # the following injects this tag in the in the <body>:
+  # the following injects this tag in the <body>:
   #   <script src="custom-script.js" type="text/javascript"></script>
   # note that all href / src files are copied to the root of the site folder 
   # regardless of their original path

@@ -147,7 +147,7 @@ class Parser:
         # stringify the url in case it's a Path object
         url = str(url)
 
-        # if no filename specificed, generate an hashed id based the query-less url,
+        # if no filename specified, generate a hashed id based the query-less url,
         # so we avoid re-downloading / caching files we already have
         if not filename:
             parsed_url = urllib.parse.urlparse(url)
@@ -320,7 +320,7 @@ class Parser:
             timeout (int): timeout in seconds
             exclude (list[Webelement], optional): toggles to exclude. Defaults to [].
 
-        Opening toggles is needed for hooking up our custom toggle logic afterwards.
+        Opening toggles is needed for hooking up our custom toggle logic afterward.
         """
         opened_toggles = exclude
         toggle_blocks = self.driver.find_elements_by_class_name("notion-toggle-block")
@@ -592,7 +592,7 @@ class Parser:
                 soup.head.append(custom_font_stylesheet)
 
         # go through each custom font, and add a css rule overriding the font-family
-        # to the font override stylesheet targetting the appropriate selector
+        # to the font override stylesheet targeting the appropriate selector
         font_override_stylesheet = soup.new_tag("style", type="text/css")
         # embed custom google font(s)
         fonts_selectors = {
