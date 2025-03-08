@@ -39,11 +39,6 @@ def get_args():
         help="Only parse the first page, then stop",
     )
     argparser.add_argument(
-        "--dark-theme",
-        action="store_true",
-        help="Use dark themed version of the target Notion.so page",
-    )
-    argparser.add_argument(
         "--timeout",
         type=int,
         default=5,

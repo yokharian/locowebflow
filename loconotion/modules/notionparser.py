@@ -8,7 +8,6 @@ import shutil
 import sys
 import time
 import urllib.parse
-import uuid
 from pathlib import Path
 
 log = logging.getLogger(f"loconotion.{__name__}")
@@ -28,9 +27,8 @@ except ModuleNotFoundError as error:
     log.critical(f"ModuleNotFoundError: {error}. have your installed the requirements?")
     sys.exit(1)
 
-from .conditions import notion_page_loaded, toggle_block_has_opened
 
-
+# noinspection PyMethodMayBeStatic
 class Parser:
     def __init__(self, config={}, args={}):
         self.config = config
@@ -39,7 +37,7 @@ class Parser:
         if not index_url:
             log.critical(
                 "No initial page url specified. If passing a configuration file,"
-                " make sure it contains a 'page' key with the url of the notion.site"
+                " make sure it contains a 'page' key with the url of the site"
                 " page to parse"
             )
             raise Exception()
@@ -258,18 +256,6 @@ class Parser:
         log.info(f"Parsing page '{url}'")
         log.debug(f"Using page config: {self.get_page_config(url)}")
 
-        try:
-            self.load_correct_theme(url)
-        except TimeoutException as ex:
-            log.critical(
-                "Timeout waiting for page content to load, or no content found."
-                " Are you sure the page is set to public?"
-            )
-            raise ex
-
-        # open the toggle blocks in the page
-        self.open_toggle_blocks(self.args["timeout"])
-
         # creates soup from the page to start parsing
         soup = BeautifulSoup(self.driver.page_source, "html5lib")
 
@@ -277,8 +263,6 @@ class Parser:
         self.set_custom_meta_tags(url, soup)
         self.process_images_and_emojis(soup)
         self.process_stylesheets(soup)
-        self.add_toggle_custom_logic(soup)
-        self.process_table_views(soup)
         self.embed_custom_fonts(url, soup)
 
         # inject any custom elements to the page
@@ -295,87 +279,6 @@ class Parser:
         self.export_parsed_page(url, soup)
         self.parse_subpages(subpages)
 
-    def load_correct_theme(self, url):
-        self.load(url)
-
-        # if dark theme is enabled, set local storage item and re-load the page
-        if self.args.get("dark_theme", True):
-            log.debug("Dark theme is enabled")
-            self.driver.execute_script(
-                "window.localStorage.setItem('theme','{\"mode\":\"dark\"}');"
-            )
-            self.load(url)
-
-        # light theme is on by default
-        # enable dark mode based on https://fruitionsite.com/ dark mode hack
-        if self.config.get("theme") == "dark":
-            self.driver.execute_script(
-                "__console.environment.ThemeStore.setState({ mode: 'dark' });"
-            )
-
-    def open_toggle_blocks(self, timeout: int, exclude=[]):
-        """Expand all the toggle block in the page to make their content visible
-
-        Args:
-            timeout (int): timeout in seconds
-            exclude (list[Webelement], optional): toggles to exclude. Defaults to [].
-
-        Opening toggles is needed for hooking up our custom toggle logic afterward.
-        """
-        opened_toggles = exclude
-        toggle_blocks = self.driver.find_elements_by_class_name("notion-toggle-block")
-        toggle_blocks += self._get_title_toggle_blocks()
-        log.debug(f"Opening {len(toggle_blocks)} new toggle blocks in the page")
-        for toggle_block in toggle_blocks:
-            if toggle_block not in opened_toggles:
-                toggle_button = toggle_block.find_element_by_css_selector(
-                    "div[role=button]"
-                )
-                # check if the toggle is already open by the direction of its arrow
-                is_toggled = "(180deg)" in (
-                    toggle_button.find_element_by_tag_name("svg").get_attribute("style")
-                )
-                if not is_toggled:
-                    # click on it, then wait until all elements are displayed
-                    self.driver.execute_script("arguments[0].click();", toggle_button)
-                    try:
-                        WebDriverWait(self.driver, timeout).until(
-                            toggle_block_has_opened(toggle_block)
-                        )
-                    except TimeoutException as ex:
-                        log.warning(
-                            "Timeout waiting for toggle block to open."
-                            " Likely it's already open, but doesn't hurt to check."
-                        )
-                    except Exception as exception:
-                        log.error(f"Error trying to open a toggle block: {exception}")
-                    opened_toggles.append(toggle_block)
-
-        # after all toggles have been opened, check the page again to see if
-        # any toggle block had nested toggle blocks inside them
-        new_toggle_blocks = self.driver.find_elements_by_class_name(
-            "notion-toggle-block"
-        )
-        new_toggle_blocks += self._get_title_toggle_blocks()
-        if len(new_toggle_blocks) > len(toggle_blocks):
-            # if so, run the function again
-            self.open_toggle_blocks(timeout, opened_toggles)
-        
-    def _get_title_toggle_blocks(self):
-        """Find toggle title blocks via their button element.
-        """
-        title_toggle_blocks = []
-        header_types = ["header", "sub_header", "sub_sub_header"]
-        for header_type in header_types:
-            title_blocks = self.driver.find_elements_by_class_name(
-                f"notion-selectable.notion-{header_type}-block"
-            )
-            for block in title_blocks:
-                toggle_buttons = block.find_elements_by_css_selector("div[role=button]")
-                if len(toggle_buttons) > 0:
-                    title_toggle_blocks.append(block)
-        return title_toggle_blocks
-    
     def clean_up(self, soup):
         # remove scripts and other tags we don't want / need
         for unwanted in soup.findAll("script"):
@@ -516,65 +419,6 @@ class Parser:
                     f.write(stylesheet.cssText)
 
                 link["href"] = str(cached_css_file)
-
-    def add_toggle_custom_logic(self, soup):
-        # add our custom logic to all toggle blocks
-        toggle_blocks = soup.findAll("div", {"class": "notion-toggle-block"})
-        toggle_blocks += self._get_title_toggle_blocks_soup(soup)
-        for toggle_block in toggle_blocks:
-            toggle_id = uuid.uuid4()
-            toggle_button = toggle_block.select_one("div[role=button]")
-            toggle_content = toggle_block.find("div", {"class": None, "style": ""})
-            if toggle_button and toggle_content:
-                # add a custom class to the toggle button and content,
-                # plus a custom attribute sharing a unique uiid so
-                # we can hook them up with some custom js logic later
-                toggle_button["class"] = toggle_block.get("class", []) + [
-                    "loconotion-toggle-button"
-                ]
-                toggle_content["class"] = toggle_content.get("class", []) + [
-                    "loconotion-toggle-content"
-                ]
-                toggle_content.attrs["loconotion-toggle-id"] = toggle_button.attrs[
-                    "loconotion-toggle-id"
-                ] = toggle_id
-
-    def _get_title_toggle_blocks_soup(self, soup):
-        """Find title toggle blocks from soup.
-        """
-        title_toggle_blocks = []
-        title_types = ["header", "sub_header", "sub_sub_header"]
-        for title_type in title_types:
-            title_blocks = soup.findAll(
-                "div",
-                {"class": f"notion-selectable notion-{title_type}-block"}
-            )
-            for block in title_blocks:
-                if block.select_one("div[role=button]") is not None:
-                    title_toggle_blocks.append(block)
-        return title_toggle_blocks 
-
-    def process_table_views(self, soup):
-        # if there are any table views in the page, add links to the title rows
-        # the link to the row item is equal to its data-block-id without dashes
-        for table_view in soup.findAll("div", {"class": "notion-table-view"}):
-            for table_row in table_view.findAll(
-                "div", {"class": "notion-collection-item"}
-            ):
-                table_row_block_id = table_row["data-block-id"]
-                table_row_href = "/" + table_row_block_id.replace("-", "")
-                row_target_span = table_row.find("span")
-                row_target_span["style"] = row_target_span["style"].replace(
-                    "pointer-events: none;", ""
-                )
-                row_link_wrapper = soup.new_tag(
-                    "a",
-                    attrs={
-                        "href": table_row_href,
-                        "style": "cursor: pointer; color: inherit; text-decoration: none; fill: inherit;",
-                    },
-                )
-                row_target_span.wrap(row_link_wrapper)
 
     def embed_custom_fonts(self, url, soup):
         if not (custom_fonts := self.get_page_config(url).get("fonts", {})):
@@ -756,7 +600,6 @@ class Parser:
 
     def load(self, url):
         self.driver.get(url)
-        WebDriverWait(self.driver, 60).until(notion_page_loaded())
 
     def run(self):
         start_time = time.time()
