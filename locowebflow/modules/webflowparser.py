@@ -87,8 +87,6 @@ class Parser:
         # initialize chromedriver
         self.driver = self.init_chromedriver()
 
-        self.starting_url = index_url
-
     def get_page_config(self, token):
         # starts by grabbing the gobal site configuration table, if exists
         site_config = self.config.get("site", {})
@@ -347,6 +345,20 @@ class Parser:
             log.debug(f"Adding meta tag {str(tag)}")
             soup.head.append(tag)
 
+    def sanitize_domain_image(self, img):
+        raise NotImplementedError
+        # TODO implement images that starts with /
+        # # you can use this code as a reference
+        # img_src = f'https://www.notion.so{img["src"]}'
+        # notion's own default images urls are in a weird format, need to sanitize them
+        # img_src = 'https://www.notion.so' + img['src'].split("notion.so")[-1].replace("notion.so", "").split("?")[0]
+        # if (not '.amazonaws' in img_src):
+        # img_src = urllib.parse.unquote(img_src)
+        # return img_src
+
+    # cached_image = self.cache_file(img_src)
+    # img["src"] = cached_image
+
     def process_images_and_emojis(self, soup):
         # process images & emojis
         cache_images = True
@@ -356,11 +368,7 @@ class Parser:
                     img_src = img["src"]
                     # if the path starts with /, it's one of notion's predefined images
                     if img["src"].startswith("/"):
-                        img_src = f'https://www.notion.so{img["src"]}'
-                        # notion's own default images urls are in a weird format, need to sanitize them
-                        # img_src = 'https://www.notion.so' + img['src'].split("notion.so")[-1].replace("notion.so", "").split("?")[0]
-                        # if (not '.amazonaws' in img_src):
-                        # img_src = urllib.parse.unquote(img_src)
+                        img_src = self.sanitize_domain_image(img)
 
                     cached_image = self.cache_file(img_src)
                     img["src"] = cached_image
