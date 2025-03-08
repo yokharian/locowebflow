@@ -10,6 +10,8 @@ import time
 import urllib.parse
 from pathlib import Path
 
+from locowebflow.modules.conditions import PageLoaded
+
 log = logging.getLogger(f"locowebflow.{__name__}")
 
 try:
@@ -20,6 +22,7 @@ try:
     from selenium import webdriver
     from selenium.common.exceptions import TimeoutException
     from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service
     from selenium.webdriver.support.ui import WebDriverWait
 
     cssutils.log.setLevel(logging.CRITICAL)  # removes warning logs from cssutils
@@ -45,11 +48,11 @@ class Parser:
             ) from e
 
         # get the site name from the config, or make it up by cleaning the target page's slug
-        site_name = self.config.get(
-            "name", self.get_page_slug(index_url, extension=False)
-        )
-
-        self.index_url = index_url
+        site_name = self.config.get("name", self.get_page_path(index_url))
+        if site_name == "index.html":  # site name will be domain name
+            site_name = urllib.parse.urlparse(index_url).netloc
+        else:
+            site_name = "/".join(site_name.split("/")[1:])
 
         # set the output folder based on the site name
         self.dist_folder = Path(config.get("output", Path("dist") / site_name))
@@ -91,12 +94,12 @@ class Parser:
         site_config = self.config.get("site", {})
 
         # check if there's anything wrong with the site config
-        if site_config.get("slug", None):
+        if site_config.get("path", None):
             log.error(
-                "'slug' parameter has no effect in the [site] table, "
+                "'path' parameter has no effect in the [site] table, "
                 "and should only present in page tables."
             )
-            del site_config["slug"]
+            del site_config["path"]
 
         # find a table in the configuration file whose key contains the passed token string
         site_pages_config = self.config.get("pages", {})
@@ -107,7 +110,7 @@ class Parser:
             if len(matching_pages_config) > 1:
                 log.error(
                     f"multiple matching page config tokens found for {token}"
-                    " in configuration file. Make sure pages urls / slugs are unique"
+                    " in configuration file. Make sure pages urls / paths are unique"
                 )
                 return site_config
             else:
@@ -126,24 +129,18 @@ class Parser:
             # log.debug(f"No config table found for page token {token}, using global site config table")
             return site_config
 
-    def get_page_slug(self, url, extension=True):
-        # first check if the url has a custom slug configured in the config file
-        custom_slug = self.get_page_config(url).get("slug", None)
-        if custom_slug:
-            log.debug(f"Custom slug found for url '{url}': '{custom_slug}'")
-            return custom_slug.strip("/") + (".html" if extension else "")
+    def get_page_path(self, input_url):
+        # first check if the url has a custom path configured in the config file
+        custom_path = self.get_page_config(input_url).get("path", None)
+        if custom_path:
+            log.debug(f"Custom path found for url '{input_url}': '{custom_path}'")
+            return custom_path.strip("/")
         else:
-            # if not, clean up the existing slug
-            path = urllib.parse.urlparse(url).path.strip("/")
-            if "-" in path and len(path.split("-")) > 1:
-                # a standard notion page looks like the-page-title-[uiid]
-                # strip the uuid and keep the page title only
-                path = "-".join(path.split("-")[:-1]).lower()
-            elif "?" in path:
-                # database pages just have an uiid and a query param
-                # not much to do here, just get rid of the query param
-                path = path.split("?")[0].lower()
-            return path + (".html" if extension else "")
+            input_url = urllib.parse.urlparse(input_url)
+            if input_url.path.strip("/") == "":
+                return "index.html"
+            else:
+                return input_url.path.strip("/")
 
     def cache_file(self, url, filename=None):
         # stringify the url in case it's a Path object
@@ -242,11 +239,10 @@ class Parser:
         chrome_options.add_argument("--disable-logging")
         #  removes the 'DevTools listening' log message
         chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        return webdriver.Chrome(
-            executable_path=str(chromedriver_path),
-            service_log_path=str(logs_path),
-            options=chrome_options,
-        )
+        chrome_options.add_argument(f"--log-path={str(logs_path)}")
+
+        service = Service(str(chromedriver_path))
+        return webdriver.Chrome(options=chrome_options, service=service)
 
     def parse_page(self, url: str):
         """Parse page at url and write it to file, then recursively parse all subpages.
@@ -259,6 +255,15 @@ class Parser:
         """
         log.info(f"Parsing page '{url}'")
         log.debug(f"Using page config: {self.get_page_config(url)}")
+
+        try:
+            self.load(url)
+        except TimeoutException as e:
+            log.critical(
+                "Timeout waiting for page content to load, or no content found."
+                " Are you sure the page is set to public?"
+            )
+            raise e from e
 
         # creates soup from the page to start parsing
         soup = BeautifulSoup(self.driver.page_source, "html5lib")
@@ -276,10 +281,10 @@ class Parser:
 
         self.inject_loconotion_script_and_css(soup)
 
-        hrefDomain = f'{url.split("notion.site")[0]}notion.site'
-        log.info(f"Got the domain as {hrefDomain}")
+        href_domain = urllib.parse.urlparse(url).hostname
+        log.info(f"Got the domain as {href_domain}")
 
-        subpages = self.find_subpages(url, soup, hrefDomain)
+        subpages = self.find_subpages(url, soup, href_domain)
         self.export_parsed_page(url, soup)
         self.parse_subpages(subpages)
 
@@ -585,11 +590,11 @@ class Parser:
     def export_parsed_page(self, url, soup):
         # exports the parsed page
         html_str = str(soup)
-        html_file = self.get_page_slug(url) if url != self.index_url else "index.html"
+        html_file = self.get_page_path(url) if url != self.index_url else "index.html"
         if html_file in self.processed_pages.values():
             log.error(
-                f"Found duplicate pages with slug '{html_file}' - previous one will be"
-                " overwritten. Make sure that your notion pages names or custom slugs"
+                f"Found duplicate pages with path '{html_file}' - previous one will be"
+                " overwritten. Make sure that your notion pages names or custom paths"
                 " in the configuration files are unique"
             )
         log.info(f"Exporting page '{url}' as '{html_file}'")
@@ -608,6 +613,7 @@ class Parser:
 
     def load(self, url):
         self.driver.get(url)
+        WebDriverWait(self.driver, 60).until(PageLoaded())
 
     def run(self):
         start_time = time.time()
