@@ -1,24 +1,26 @@
 [tool.poetry]
-name = "loconotion"
-version = "0.1.0"
-description = "Turn Notion pages into lightweight, customizable static websites"
-authors = ["Leonardo Cavaletti <impeto.blu@gmail.com>"]
+name = "locowebflow"
+version = "1.0.0"
+description = "📄 Python tool to export webflow sites into github pages "
+authors = ["sofia escobedo <sofia@escobedo.mx>","Leonardo Cavaletti <impeto.blu@gmail.com>"]
 
 [tool.poetry.dependencies]
-python = "^3.7"
+python = "^3.12"
 beautifulsoup4 = "^4.9.1"
-chromedriver-autoinstaller = "^0.2.0"
 colorama = "^0.4.3"
-cssutils = "^1.0.2"
-requests = "^2.23.0"
-selenium = "^3.141.0"
+selenium = "4.15.1"
 toml = "^0.10.1"
 html5lib = "^1.1"
+chromedriver = "^2.24.1"
+cssutils = "^2.11.1"
+requests = "^2.32.3"
+poetry = ">=1.8.4"
+chromedriver-autoinstaller = "^0.6.4"
 
-[tool.poetry.dev-dependencies]
-black = "^19.10b0"
-pytest = "^7.1.1"
+[tool.poetry.group.dev.dependencies]
+black = "^25.1.0"
+pytest = "^8.3.5"
 
 [build-system]
-requires = ["poetry>=0.12"]
+requires = ["poetry>=1.8.4"]
 build-backend = "poetry.masonry.api"
