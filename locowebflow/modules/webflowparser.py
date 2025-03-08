@@ -30,17 +30,19 @@ except ModuleNotFoundError as error:
 
 # noinspection PyMethodMayBeStatic
 class Parser:
-    def __init__(self, config={}, args={}):
-        self.config = config
-        self.args = args
-        index_url = self.config.get("page", None)
-        if not index_url:
-            log.critical(
+    processed_pages = {}
+
+    def __init__(self, args=None, config=None):
+        self.config = config or {}
+        self.args = args or {}
+        try:
+            self.starting_url = self.index_url = index_url = self.config["page"]
+        except KeyError as e:
+            raise KeyError(
                 "No initial page url specified. If passing a configuration file,"
                 " make sure it contains a 'page' key with the url of the site"
                 " page to parse"
-            )
-            raise Exception()
+            ) from e
 
         # get the site name from the config, or make it up by cleaning the target page's slug
         site_name = self.config.get(
@@ -216,14 +218,14 @@ class Parser:
         if not chromedriver_path:
             try:
                 chromedriver_path = chromedriver_autoinstaller.install()
-            except Exception as exception:
+            except Exception as e:
                 log.critical(
-                    f"Failed to install the built-in chromedriver: {exception}\n"
+                    f"Failed to install the built-in chromedriver: {e}\n"
                     "\nDownload the correct version for your system at"
                     " https://chromedriver.chromium.org/downloads and use the"
                     " --chromedriver argument to point to the chromedriver executable"
                 )
-                raise exception
+                raise e from e
 
         log.info(f"Initialising chromedriver at {chromedriver_path}")
         logs_path = Path.cwd() / ".logs" / "webdrive.log"

@@ -128,14 +128,14 @@ def init_parser(args, log):
 
         log.info(f"Initialising parser for {args.target}")
         config = {"page": args.target}
-        parser = Parser(config=config, args=vars(args))
+        parser = Parser(args=vars(args), config=config)
 
     elif Path(args.target).is_file():
         with open(args.target, encoding="utf-8") as f:
             parsed_config = toml.loads(f.read())
             log.info("Initialising parser with configuration file")
             log.debug(parsed_config)
-            parser = Parser(config=parsed_config, args=vars(args))
+            parser = Parser(args=vars(args), config=parsed_config)
 
     else:
         log.critical(f"Config file {args.target} does not exist")
