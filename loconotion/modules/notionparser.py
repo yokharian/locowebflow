@@ -43,7 +43,9 @@ class Parser:
             raise Exception()
 
         # get the site name from the config, or make it up by cleaning the target page's slug
-        site_name = self.config.get("name", self.get_page_slug(index_url, extension=False))
+        site_name = self.config.get(
+            "name", self.get_page_slug(index_url, extension=False)
+        )
 
         self.index_url = index_url
 
@@ -283,7 +285,9 @@ class Parser:
         # remove scripts and other tags we don't want / need
         for unwanted in soup.findAll("script"):
             unwanted.decompose()
-        for aif_production in soup.findAll("iframe", {"src": "https://aif.notion.so/aif-production.html"}):
+        for aif_production in soup.findAll(
+            "iframe", {"src": "https://aif.notion.so/aif-production.html"}
+        ):
             aif_production.decompose()
         for intercom_frame in soup.findAll("iframe", {"id": "intercom-frame"}):
             intercom_frame.decompose()
@@ -553,7 +557,9 @@ class Parser:
                     else:
                         extension_in_links = self.config.get("extension_in_links", True)
                         a["href"] = (
-                            self.get_page_slug(sub_page_href, extension=extension_in_links)
+                            self.get_page_slug(
+                                sub_page_href, extension=extension_in_links
+                            )
                             if sub_page_href != self.index_url
                             else ("index.html" if extension_in_links else "")
                         )
