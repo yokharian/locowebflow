@@ -1,7 +1,7 @@
-import pytest
 from unittest.mock import call, MagicMock
-from modules.notionparser import Parser
-import urllib
+
+import pytest
+from modules.webflowparser import Parser
 
 
 @pytest.fixture
@@ -19,7 +19,7 @@ def soup():
 
 
 def test_inject_file(parser: Parser, soup):
-    custom_injects = {"body": {"script": [{"src": "loconotion/tests/test_file.txt"}]}}
+    custom_injects = {"body": {"script": [{"src": "locowebflow/tests/test_file.txt"}]}}
     parser.inject_custom_tags("body", soup, custom_injects)
     assert soup.new_tag.return_value.__setitem__.call_args == call(
         "src", "c93ac3dbe4fa24abcb232ef9c63a633661226a3f.txt"

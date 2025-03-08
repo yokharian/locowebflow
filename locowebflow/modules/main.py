@@ -5,9 +5,9 @@ import sys
 import urllib.parse
 from pathlib import Path
 
-from .notionparser import Parser
+from .webflowparser import Parser
 
-log = logging.getLogger("loconotion")
+log = logging.getLogger("locowebflow")
 
 try:
     import colorama
@@ -22,12 +22,12 @@ except ModuleNotFoundError as error:
 def get_args():
     # set up argument parser and return parsed args
     argparser = argparse.ArgumentParser(
-        description="Generate static websites from Notion.so pages"
+        description="Generate static websites from webflow.io pages"
     )
     argparser.add_argument(
         "target",
         help="The config file containing the site properties, or the url"
-        " of the Notion.so page to generate the site from",
+        " of the webflow.io page to generate the site from",
     )
     argparser.add_argument(
         "--chromedriver",
@@ -73,7 +73,7 @@ def get_args():
 
 def setup_logging(args):
     # set up some pretty logs
-    log = logging.getLogger("loconotion")
+    log = logging.getLogger("locowebflow")
     log.setLevel(logging.INFO if not args.verbose else logging.DEBUG)
     log_screen_handler = logging.StreamHandler(stream=sys.stdout)
     log.addHandler(log_screen_handler)
@@ -123,13 +123,12 @@ def init_parser(args, log):
             log.critical("Connection error")
             raise exception
 
-        if "notion.so" in args.target or "notion.site" in args.target:
-            log.info("Initialising parser with simple page url")
-            config = {"page": args.target}
-            parser = Parser(config=config, args=vars(args))
-        else:
-            log.critical(f"{args.target} is not a notion.so page")
-            raise Exception()
+        if "webflow.io" not in args.target:
+            log.critical(f"{args.target} is not a webflow.io page")
+
+        log.info(f"Initialising parser for {args.target}")
+        config = {"page": args.target}
+        parser = Parser(config=config, args=vars(args))
 
     elif Path(args.target).is_file():
         with open(args.target, encoding="utf-8") as f:

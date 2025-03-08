@@ -10,7 +10,7 @@ import time
 import urllib.parse
 from pathlib import Path
 
-log = logging.getLogger(f"loconotion.{__name__}")
+log = logging.getLogger(f"locowebflow.{__name__}")
 
 try:
     import chromedriver_autoinstaller
