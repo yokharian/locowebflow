@@ -517,7 +517,12 @@ class Parser:
                     if attr == "inner_html":
                         continue
 
-                    injected_tag[attr] = None if value == "|NONE_VALUE|" else value
+                    if attr.lower() in ["string", "str", "inline", "inline_script"]:
+                        log.info(f"injecting inline script to '{section}'")
+                        injected_tag.string = value
+                    else:
+                        injected_tag[attr] = None if value == "|NONE_VALUE|" else value
+
                     # if the value refers to a file, copy it to the dist folder
                     if attr.lower() in ["href", "src"]:
                         log.debug(f"Copying injected file '{value}'")
@@ -527,9 +532,6 @@ class Parser:
                             path_to_file = Path.cwd() / value.strip("/")
                         cached_custom_file = self.cache_file(path_to_file)
                         injected_tag[attr] = str(cached_custom_file)  # source.name
-                    if attr.lower() in ["string", "str", "inline", "inline_script"]:
-                        log.debug(f"injecting inline script to '{section}'")
-                        injected_tag.string = value
                 log.debug(f"Injecting <{section}> tag: {injected_tag}")
 
                 # adding `inner_html` as the tag's content
