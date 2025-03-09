@@ -1,5 +1,5 @@
-## Loconotion Site Configuration File ##
-# full .toml configuration example file to showcase all of Loconotion's available settings
+## Locowebflow Site Configuration File ##
+# full .toml configuration example file to showcase all of Locowebflow's available settings
 # check out https://github.com/toml-lang/toml for more info on the toml format
 
 # name of the folder that the site will be generated in
@@ -7,7 +7,7 @@ name = "Notion Test Site"
 
 # the notion.so page to being parsing from. This page will become the index.html
 # of the generated site, and loconotation will parse all sub-pages present on the page
-page = "https://www.notion.so/Loconotion-Example-Page-03c403f4fdc94cc1b315b9469a8950ef"
+page = "https://legowerk.webflow.io/"
 
 ## Global Site Settings ##
 # this [site] table defines override settings for the whole site
@@ -16,13 +16,13 @@ page = "https://www.notion.so/Loconotion-Example-Page-03c403f4fdc94cc1b315b9469a
   ## Custom Meta Tags ##
   # defined as an array of tables (double square brackets)
   # each key in the table maps to an atttribute in the tag
-  # the following adds the tag <meta name="title" content="Loconotion Test Site"/>
+  # the following adds the tag <meta name="title" content="Locowebflow Test Site"/>
   [[site.meta]]
   name = "title"
-  content = "Loconotion Test Site"
+  content = "Locowebflow Test Site"
   [[site.meta]]
   name = "description"
-  content = "A static site generated from a Notion.so page using Loconotion"
+  content = "A static site generated from a Notion.so page using Locowebflow"
 
   ## Custom Fonts ##
   # you can specify the name of a Google font to use on the site - use the font embed name
