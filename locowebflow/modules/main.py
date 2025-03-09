@@ -1,5 +1,6 @@
 import argparse
 import copy
+import json
 import logging
 import sys
 import urllib.parse
@@ -132,7 +133,12 @@ def init_parser(args, log):
 
     elif Path(args.target).is_file():
         with open(args.target, encoding="utf-8") as f:
-            parsed_config = toml.loads(f.read())
+            if f.name.endswith(".toml"):
+                parsed_config = toml.loads(f.read())
+            elif f.name.endswith(".json"):
+                parsed_config = json.loads(f.read())
+            else:
+                raise NotImplementedError(f.name)
             log.info("Initialising parser with configuration file")
             log.debug(parsed_config)
             parser = Parser(args=vars(args), config=parsed_config)
