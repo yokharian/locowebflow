@@ -7,7 +7,8 @@ import re
 import shutil
 import sys
 import time
-from typing import List, Dict, Any
+from pathlib import Path
+from typing import Dict, Any
 from urllib.parse import (
     urlparse,
     quote_plus as parse_quote_plus,
@@ -15,7 +16,6 @@ from urllib.parse import (
     parse_qs,
     unquote,
 )
-from pathlib import Path
 
 from locowebflow.modules.conditions import PageLoaded
 
@@ -163,7 +163,7 @@ class Parser:
             parsed_url = urlparse(url)
             queryless_url = parsed_url.netloc + parsed_url.path
             query_params = parse_qs(parsed_url.query)
-            # if any of the query params contains a size parameters store it in the has
+            # if any of the query params contains a size parameters store it in the hash
             # so we can download other higher-resolution versions if needed
             if "width" in query_params.keys():
                 queryless_url = queryless_url + f"?width={query_params['width']}"
@@ -175,7 +175,7 @@ class Parser:
         # check if there are any files matching the filename, ignoring extension
         matching_file = glob.glob(str(destination.with_suffix(".*")))
         if not matching_file:
-            # if url has a network scheme, download the file
+            # if the url has a network scheme, download the file
             if "http" in urlparse(url).scheme:
                 try:
                     # Disabling proxy speeds up requests time
@@ -217,7 +217,7 @@ class Parser:
                     destination = destination.with_suffix(Path(url).suffix)
                     shutil.copyfile(url, destination)
                     return destination.relative_to(self.dist_folder)
-        # if we already have a matching cached file, just return its relative path
+        # if we already have a matching cached file, return its relative path
         else:
             cached_file = Path(matching_file[0]).relative_to(self.dist_folder)
             log.debug(f"'{url}' was already downloaded")
@@ -252,7 +252,6 @@ class Parser:
         chrome_options.add_argument("--disable-logging")
         ## https://stackoverflow.com/questions/32970855/clear-cache-before-running-some-selenium-webdriver-tests-using-java
         chrome_options.add_argument("--incognito")
-        #  removes the 'DevTools listening' log message
         chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
         chrome_options.add_argument(f"--log-path={str(logs_path)}")
 
@@ -260,7 +259,7 @@ class Parser:
         return webdriver.Chrome(options=chrome_options, service=service)
 
     def parse_page(self, url: str):
-        """Parse page at url and write it to file, then recursively parse all subpages.
+        """Parse the page at url and write it to file, then recursively parse all subpages.
 
         Args:
 
@@ -295,7 +294,10 @@ class Parser:
         self.inject_custom_tags("head", soup, custom_injects)
         self.inject_custom_tags("body", soup, custom_injects)
 
+        self.correct_local_references(soup)
+
         subpages = self.find_subpages(url, soup)
+
         self.export_parsed_page(url, soup)
         self.parse_subpages(subpages)
 
@@ -325,6 +327,32 @@ class Parser:
             if unwanted_og_tag:
                 unwanted_og_tag.decompose()
 
+    def correct_local_references(self, soup):
+
+        def _correct_attr(element, attr):
+            tag_value = element[attr]
+            if "http" in tag_value:
+                return 0  # external domain or not a file cached
+            if tag_value.startswith("/") or tag_value.startswith("#"):
+                return 0  # correctly configured element
+            if tag_value.strip().startswith("data:") or tag_value.strip().startswith(
+                "mailto:"
+            ):
+                return 0
+            element[attr] = f"/{tag_value}"
+            return 1
+
+        corrected_references = []
+        for href_element in soup.find_all(href=True):
+            success = _correct_attr(href_element, "href")
+            corrected_references += [href_element] if success else []
+
+        for src_element in soup.find_all(src=True):
+            success = _correct_attr(src_element, "src")
+            corrected_references += [src_element] if success else []
+
+        log.info(f"Corrected local references to {corrected_references} references")
+
     def clean_up(self, url, soup):
         config = self.get_page_config(url).get("cleanup", {})
 
@@ -340,7 +368,7 @@ class Parser:
         for unwanted in soup.find_all(class_="w-webflow-badge"):
             unwanted.decompose()
 
-        # clean up the default meta tags
+        # clean up the default meta-tags
         # self._clean_up_meta_tags(soup)
 
     def set_custom_meta_tags(self, url, soup):
@@ -381,39 +409,53 @@ class Parser:
             image_url = background_image[
                 background_image.find("(") + 1 : background_image.find(")")
             ]
-            cached_image_url = self.cache_file(image_url)
+            cached_image_url = f"/{self.cache_file(image_url)}"
 
             style["background-image"] = background_image.replace(
                 image_url, str(cached_image_url)
             )
             element["style"] = style.cssText
 
-        for img in soup.find_all("img"):
-            if img.has_attr("src"):
-                if cache_images and "data:image" not in img["src"]:
-                    img_src = img["src"]
-                    # if the path starts with /, it's one of notion's predefined images
-                    if img["src"].startswith("/"):
-                        img_src = self.sanitize_a_domain_image(img)
+        for link in soup.find_all("link"):
+            if not link.has_attr("href"):
+                continue
+            link_url = link["href"]
+            if not "favicon" in link_url:
+                continue
 
-                    cached_image = self.cache_file(img_src)
-                    img["src"] = cached_image
-                elif img["src"].startswith("/"):
-                    img["src"] = self.domain + img["src"]
+            if "data:image" not in link_url:
+                if link_url.startswith("/"):
+                    link_url = self.domain + link_url
+
+                link["href"] = str(self.cache_file(link_url))
+            elif link_url.startswith("/"):
+                link["href"] = self.domain + link_url
+
+        for img in soup.find_all("img"):
+            if not img.has_attr("src"):
+                continue
+            img_src = img["src"]
+            if cache_images and "data:image" not in img_src:
+                # if the path starts with /, it's one of notion's predefined images
+                if img_src.startswith("/"):
+                    img_src = self.sanitize_a_domain_image(img)
+
+                img["src"] = str(self.cache_file(img_src))
+            elif img_src.startswith("/"):
+                img["src"] = self.domain + img_src
 
     def process_scripts(self, soup):
         for script in soup.find_all("script"):
             if script.has_attr("src"):
-                cached_script_file = self.cache_file(script["src"])
-                script["src"] = str(cached_script_file)
+                script["src"] = str(self.cache_file(script["src"]))
 
     def process_stylesheets(self, soup):
         # process stylesheets
         for link in soup.find_all("link", rel="stylesheet"):
             if link.has_attr("href"):
                 cached_css_file = self.cache_file(link["href"], extension="css")
-                # files in the css file might be reference with a relative path,
-                # so store the path of the current css file
+                # files in the CSS file might be reference with a relative path,
+                # so store the path of the current CSS file
                 parent_css_path = os.path.split(urlparse(link["href"]).path)[0].strip()
                 # open the locally saved file
                 with open(self.dist_folder / cached_css_file, "rb+") as f:
@@ -431,7 +473,7 @@ class Parser:
 
                             font_url = font_file.strip()
                             if font_url.startswith("/"):
-                                # assemble the url given the current css path
+                                # assemble the url given the current CSS path
                                 font_url = (
                                     self.domain + parent_css_path + "/" + font_file
                                 )
@@ -440,7 +482,7 @@ class Parser:
                             cached_font_file = self.cache_file(
                                 font_url, Path(font_file).name
                             )
-                            rule.style["src"] = f"url({cached_font_file})"
+                            rule.style["src"] = f"url(/{cached_font_file})"
 
                     # commit stylesheet edits to file
                     f.seek(0)
@@ -466,7 +508,7 @@ class Parser:
                 )
                 soup.head.append(custom_font_stylesheet)
 
-        # go through each custom font, and add a css rule overriding the font-family
+        # go through each custom font, and add a CSS rule overriding the font-family
         # to the font override stylesheet targeting the appropriate selector
         font_override_stylesheet = soup.new_tag("style", type="text/css")
         # embed custom google font(s)
@@ -497,7 +539,7 @@ class Parser:
                 fonts_selectors["site"] + " {font-family:" + str(site_font) + "} "
             )
 
-        # finally append the font overrides stylesheets to the page
+        # finally, append the font overrides stylesheets to the page
         soup.head.append(font_override_stylesheet)
 
     def inject_custom_tags(self, section: str, soup, custom_injects: dict):
@@ -533,7 +575,7 @@ class Parser:
                         else:
                             path_to_file = Path.cwd() / value.strip("/")
                         cached_custom_file = self.cache_file(path_to_file)
-                        injected_tag[attr] = str(cached_custom_file)  # source.name
+                        injected_tag[attr] = str(cached_custom_file)
                 log.debug(f"Injecting <{section}> tag: {injected_tag}")
 
                 # adding `inner_html` as the tag's content
@@ -545,7 +587,7 @@ class Parser:
     def find_subpages(self, url, soup):
         log.info(f"Got the target domain as {self.domain}")
 
-        # find sub-pages and clean paths / links
+        # find subpages and clean paths / links
         subpages = []
         parse_links = not self.get_page_config(url).get("no-links", False)
         for a in soup.find_all("a", href=True):
@@ -600,7 +642,7 @@ class Parser:
                 )
             subpages.append(sub_page_href)
             log.debug(f"Found link to page {a['href']}")
-        return subpages
+        return set(subpages)
 
     def export_parsed_page(self, url, soup):
         # exports the parsed page
@@ -608,12 +650,19 @@ class Parser:
         html_file = (
             self.get_page_path(url) if url != self.starting_url else "index.html"
         )
+        html_file = html_file.strip("/")
         if html_file in self.processed_pages.values():
             log.error(
                 f"Found duplicate pages with path '{html_file}' - previous one will be"
                 " overwritten. Make sure that your notion pages names or custom paths"
                 " in the configuration files are unique"
             )
+
+        if html_file != "index.html":
+            target_path = self.dist_folder / html_file
+            target_path.mkdir(parents=True, exist_ok=True)
+            html_file = "/".join(html_file.split("/") + ["index.html"])
+
         log.info(f"Exporting page '{url}' as '{html_file}'")
         with open(self.dist_folder / html_file, "wb") as f:
             f.write(html_str.encode("utf-8").strip())
