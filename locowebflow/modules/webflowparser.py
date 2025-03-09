@@ -351,7 +351,9 @@ class Parser:
             success = _correct_attr(src_element, "src")
             corrected_references += [src_element] if success else []
 
-        log.info(f"Corrected local references to {corrected_references} references")
+        log.info(
+            f"Corrected local references to {len(corrected_references)} references"
+        )
 
     def clean_up(self, url, soup):
         config = self.get_page_config(url).get("cleanup", {})
