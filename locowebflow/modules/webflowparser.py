@@ -7,7 +7,14 @@ import re
 import shutil
 import sys
 import time
-import urllib.parse
+from typing import List, Dict, Any
+from urllib.parse import (
+    urlparse,
+    quote_plus as parse_quote_plus,
+    urlsplit,
+    parse_qs,
+    unquote,
+)
 from pathlib import Path
 
 from locowebflow.modules.conditions import PageLoaded
@@ -35,11 +42,19 @@ except ModuleNotFoundError as error:
 class Parser:
     processed_pages = {}
 
+    @property
+    def url_parts(self):
+        return urlsplit(self.starting_url)
+
+    @property
+    def domain(self):
+        return f"{self.url_parts.scheme}://{self.url_parts.netloc}"
+
     def __init__(self, args=None, config=None):
         self.config = config or {}
         self.args = args or {}
         try:
-            self.starting_url = self.index_url = index_url = self.config["page"]
+            self.starting_url = starting_url = self.config["page"]
         except KeyError as e:
             raise KeyError(
                 "No initial page url specified. If passing a configuration file,"
@@ -47,12 +62,10 @@ class Parser:
                 " page to parse"
             ) from e
 
-        # get the site name from the config, or make it up by cleaning the target page's slug
-        site_name = self.config.get("name", self.get_page_path(index_url))
-        if site_name == "index.html":  # site name will be domain name
-            site_name = urllib.parse.urlparse(index_url).netloc
-        else:
-            site_name = "/".join(site_name.split("/")[1:])
+        # get the site name from the config, or make it up by cleaning the target page's domain
+        site_name = self.config.get("name", None)
+        if not site_name:  # site name will be domain name
+            site_name = urlparse(starting_url).netloc
 
         # set the output folder based on the site name
         self.dist_folder = Path(config.get("output", Path("dist") / site_name))
@@ -132,36 +145,38 @@ class Parser:
         custom_path = self.get_page_config(input_url).get("path", None)
         if custom_path:
             log.debug(f"Custom path found for url '{input_url}': '{custom_path}'")
-            return custom_path.strip("/")
+            return custom_path
         else:
-            input_url = urllib.parse.urlparse(input_url)
+            input_url = urlparse(input_url)
             if input_url.path.strip("/") == "":
                 return "index.html"
             else:
-                return input_url.path.strip("/")
+                return input_url.path
 
-    def cache_file(self, url, filename=None):
+    def cache_file(self, url, filename=None, extension=None):
         # stringify the url in case it's a Path object
         url = str(url)
 
         # if no filename specified, generate a hashed id based the query-less url,
         # so we avoid re-downloading / caching files we already have
         if not filename:
-            parsed_url = urllib.parse.urlparse(url)
+            parsed_url = urlparse(url)
             queryless_url = parsed_url.netloc + parsed_url.path
-            query_params = urllib.parse.parse_qs(parsed_url.query)
+            query_params = parse_qs(parsed_url.query)
             # if any of the query params contains a size parameters store it in the has
             # so we can download other higher-resolution versions if needed
             if "width" in query_params.keys():
                 queryless_url = queryless_url + f"?width={query_params['width']}"
             filename = hashlib.sha1(str.encode(queryless_url)).hexdigest()
+            if extension:
+                filename += f".{extension}"
         destination = self.dist_folder / filename
 
         # check if there are any files matching the filename, ignoring extension
         matching_file = glob.glob(str(destination.with_suffix(".*")))
         if not matching_file:
             # if url has a network scheme, download the file
-            if "http" in urllib.parse.urlparse(url).scheme:
+            if "http" in urlparse(url).scheme:
                 try:
                     # Disabling proxy speeds up requests time
                     # https://stackoverflow.com/questions/45783655/first-https-request-takes-much-more-time-than-the-rest
@@ -175,7 +190,7 @@ class Parser:
                     # try to infer it from the url, and if not possible,
                     # from the content-type header mimetype
                     if not destination.suffix:
-                        file_extension = Path(urllib.parse.urlparse(url).path).suffix
+                        file_extension = Path(urlparse(url).path).suffix
                         if not file_extension:
                             content_type = response.headers.get("content-type")
                             if content_type:
@@ -192,8 +207,8 @@ class Parser:
                         f.write(response.content)
 
                     return destination.relative_to(self.dist_folder)
-                except Exception as error:
-                    log.error(f"Error downloading file '{url}': {error}")
+                except Exception as e:
+                    log.error(f"Error downloading file '{url}': {e}")
                     return url
             # if not, check if it's a local file, and copy it to the dist folder
             else:
@@ -246,7 +261,7 @@ class Parser:
         """Parse page at url and write it to file, then recursively parse all subpages.
 
         Args:
-            url (str): URL of the page to parse.
+
 
         After the page at `url` has been parsed, calls itself recursively for every subpage
         it has discovered.
@@ -266,10 +281,11 @@ class Parser:
         # creates soup from the page to start parsing
         soup = BeautifulSoup(self.driver.page_source, "html5lib")
 
-        self.clean_up(soup)
+        self.clean_up(url, soup)
         self.set_custom_meta_tags(url, soup)
-        self.process_images_and_emojis(soup)
+        self.process_images(soup)
         self.process_stylesheets(soup)
+        self.process_scripts(soup)
         self.embed_custom_fonts(url, soup)
 
         # inject any custom elements to the page
@@ -277,39 +293,11 @@ class Parser:
         self.inject_custom_tags("head", soup, custom_injects)
         self.inject_custom_tags("body", soup, custom_injects)
 
-        self.inject_loconotion_script_and_css(soup)
-
-        href_domain = urllib.parse.urlparse(url).hostname
-        log.info(f"Got the domain as {href_domain}")
-
-        subpages = self.find_subpages(url, soup, href_domain)
+        subpages = self.find_subpages(url, soup)
         self.export_parsed_page(url, soup)
         self.parse_subpages(subpages)
 
-    def clean_up(self, soup):
-        # remove scripts and other tags we don't want / need
-        for unwanted in soup.findAll("script"):
-            unwanted.decompose()
-        for aif_production in soup.findAll(
-            "iframe", {"src": "https://aif.notion.so/aif-production.html"}
-        ):
-            aif_production.decompose()
-        for intercom_frame in soup.findAll("iframe", {"id": "intercom-frame"}):
-            intercom_frame.decompose()
-        for intercom_div in soup.findAll("div", {"class": "intercom-lightweight-app"}):
-            intercom_div.decompose()
-        for overlay_div in soup.findAll("div", {"class": "notion-overlay-container"}):
-            overlay_div.decompose()
-        for vendors_css in soup.find_all("link", href=lambda x: x and "vendors~" in x):
-            vendors_css.decompose()
-
-        # collection selectors (List, Gallery, etc.) don't work, so remove them
-        for collection_selector in soup.findAll(
-            "div", {"class": "notion-collection-view-select"}
-        ):
-            collection_selector.decompose()
-
-        # clean up the default notion meta tags
+    def _clean_up_meta_tags(self, soup):
         for tag in [
             "description",
             "twitter:card",
@@ -335,6 +323,24 @@ class Parser:
             if unwanted_og_tag:
                 unwanted_og_tag.decompose()
 
+    def clean_up(self, url, soup):
+        config = self.get_page_config(url).get("cleanup", {})
+
+        soup_scripts = soup.find_all("script")
+        # remove scripts and other tags we don't want / need
+        for target_script in config.get("scripts", []):  # type: Dict[str:Any]
+            target_src = target_script["src"]
+            for unwanted in soup_scripts:
+                if unwanted.get("src") == target_src:
+                    unwanted.decompose()
+
+        # needed so we don't cache webflow assets later
+        for unwanted in soup.find_all(class_="w-webflow-badge"):
+            unwanted.decompose()
+
+        # clean up the default meta tags
+        # self._clean_up_meta_tags(soup)
+
     def set_custom_meta_tags(self, url, soup):
         # set custom meta tags
         custom_meta_tags = self.get_page_config(url).get("meta", [])
@@ -345,67 +351,68 @@ class Parser:
             log.debug(f"Adding meta tag {str(tag)}")
             soup.head.append(tag)
 
-    def sanitize_domain_image(self, img):
-        raise NotImplementedError
-        # TODO implement images that starts with /
-        # # you can use this code as a reference
-        # img_src = f'https://www.notion.so{img["src"]}'
+    def sanitize_a_domain_image(self, img):
+        img_src = self.domain + img["src"]
+        # region legacy code
         # notion's own default images urls are in a weird format, need to sanitize them
         # img_src = 'https://www.notion.so' + img['src'].split("notion.so")[-1].replace("notion.so", "").split("?")[0]
-        # if (not '.amazonaws' in img_src):
-        # img_src = urllib.parse.unquote(img_src)
-        # return img_src
+        # endregion
+        if not ".amazonaws" in img_src:
+            img_src = unquote(img_src)
+        return img_src
 
-    # cached_image = self.cache_file(img_src)
-    # img["src"] = cached_image
+    def get_elements_with_background_image(self, soup):
+        # We go through all the elements that have a style attribute.
+        for element in soup.find_all(style=True):
+            style = cssutils.parseStyle(element["style"])
+            background_image = style.getProperty("background-image")
+            if background_image:
+                if background_image.value.strip().lower().startswith("url"):
+                    yield element
 
-    def process_images_and_emojis(self, soup):
-        # process images & emojis
-        cache_images = True
-        for img in soup.findAll("img"):
+    def process_images(self, soup, cache_backgrounds=True, cache_images=True):
+        for element in self.get_elements_with_background_image(soup):
+            if not cache_backgrounds:
+                break
+            style = cssutils.parseStyle(element["style"])
+            background_image = style["background-image"]
+            image_url = background_image[
+                background_image.find("(") + 1 : background_image.find(")")
+            ]
+            cached_image_url = self.cache_file(image_url)
+
+            style["background-image"] = background_image.replace(
+                image_url, str(cached_image_url)
+            )
+            element["style"] = style.cssText
+
+        for img in soup.find_all("img"):
             if img.has_attr("src"):
                 if cache_images and "data:image" not in img["src"]:
                     img_src = img["src"]
                     # if the path starts with /, it's one of notion's predefined images
                     if img["src"].startswith("/"):
-                        img_src = self.sanitize_domain_image(img)
+                        img_src = self.sanitize_a_domain_image(img)
 
                     cached_image = self.cache_file(img_src)
                     img["src"] = cached_image
                 elif img["src"].startswith("/"):
-                    img["src"] = f'https://www.notion.so{img["src"]}'
+                    img["src"] = self.domain + img["src"]
 
-            # on emoji images, cache their sprite sheet and re-set their background url
-            if img.has_attr("class") and "notion-emoji" in img["class"]:
-                style = cssutils.parseStyle(img["style"])
-                spritesheet = style["background"]
-                spritesheet_url = spritesheet[
-                    spritesheet.find("(") + 1 : spritesheet.find(")")
-                ]
-                cached_spritesheet_url = self.cache_file(
-                    f"https://www.notion.so{spritesheet_url}"
-                )
-
-                style["background"] = spritesheet.replace(
-                    spritesheet_url, str(cached_spritesheet_url)
-                )
-                img["style"] = style.cssText
+    def process_scripts(self, soup):
+        for script in soup.find_all("script"):
+            if script.has_attr("src"):
+                cached_script_file = self.cache_file(script["src"])
+                script["src"] = str(cached_script_file)
 
     def process_stylesheets(self, soup):
         # process stylesheets
-        for link in soup.findAll("link", rel="stylesheet"):
-            if link.has_attr("href") and link["href"].startswith("/"):
-                # we don't need the vendors stylesheet
-                if "vendors~" in link["href"]:
-                    continue
-                cached_css_file = self.cache_file(
-                    f'https://www.notion.so{link["href"]}'
-                )
+        for link in soup.find_all("link", rel="stylesheet"):
+            if link.has_attr("href"):
+                cached_css_file = self.cache_file(link["href"], extension="css")
                 # files in the css file might be reference with a relative path,
                 # so store the path of the current css file
-                parent_css_path = os.path.split(
-                    urllib.parse.urlparse(link["href"]).path
-                )[0]
+                parent_css_path = os.path.split(urlparse(link["href"]).path)[0].strip()
                 # open the locally saved file
                 with open(self.dist_folder / cached_css_file, "rb+") as f:
                     stylesheet = cssutils.parseString(f.read())
@@ -417,27 +424,30 @@ class Parser:
                             font_file = (
                                 rule.style["src"].split("url(")[-1].split(")")[0]
                             )
-                            # assemble the url given the current css path
-                            font_url = "/".join(
-                                p.strip("/")
-                                for p in [
-                                    "https://www.notion.so",
-                                    parent_css_path,
-                                    font_file,
-                                ]
-                                if p.strip("/")
-                            )
+                            if "data:application" in font_file:
+                                continue
+
+                            font_url = font_file.strip()
+                            if font_url.startswith("/"):
+                                # assemble the url given the current css path
+                                font_url = (
+                                    self.domain + parent_css_path + "/" + font_file
+                                )
+
                             # don't hash the font files filenames, rather get filename only
                             cached_font_file = self.cache_file(
                                 font_url, Path(font_file).name
                             )
                             rule.style["src"] = f"url({cached_font_file})"
+
                     # commit stylesheet edits to file
                     f.seek(0)
                     f.truncate()
                     f.write(stylesheet.cssText)
 
                 link["href"] = str(cached_css_file)
+
+        return
 
     def embed_custom_fonts(self, url, soup):
         if not (custom_fonts := self.get_page_config(url).get("fonts", {})):
@@ -482,7 +492,7 @@ class Parser:
         if site_font:
             log.debug(f"Setting global site font-family to {site_font}"),
             font_override_stylesheet.append(
-                fonts_selectors["site"] + " {font-family:" + site_font + "} "
+                fonts_selectors["site"] + " {font-family:" + str(site_font) + "} "
             )
 
         # finally append the font overrides stylesheets to the page
@@ -507,16 +517,19 @@ class Parser:
                     if attr == "inner_html":
                         continue
 
-                    injected_tag[attr] = value
+                    injected_tag[attr] = None if value == "|NONE_VALUE|" else value
                     # if the value refers to a file, copy it to the dist folder
                     if attr.lower() in ["href", "src"]:
                         log.debug(f"Copying injected file '{value}'")
-                        if urllib.parse.urlparse(value).scheme:
+                        if urlparse(value).scheme:
                             path_to_file = value
                         else:
                             path_to_file = Path.cwd() / value.strip("/")
                         cached_custom_file = self.cache_file(path_to_file)
                         injected_tag[attr] = str(cached_custom_file)  # source.name
+                    if attr.lower() in ["string", "str", "inline", "inline_script"]:
+                        log.debug(f"injecting inline script to '{section}'")
+                        injected_tag.string = value
                 log.debug(f"Injecting <{section}> tag: {injected_tag}")
 
                 # adding `inner_html` as the tag's content
@@ -525,80 +538,72 @@ class Parser:
 
                 soup.find(section).append(injected_tag)
 
-    def inject_loconotion_script_and_css(self, soup):
-        # inject loconotion's custom stylesheet and script
-        loconotion_custom_css = self.cache_file(Path("bundles/loconotion.css"))
-        custom_css = soup.new_tag(
-            "link", rel="stylesheet", href=str(loconotion_custom_css)
-        )
-        soup.head.insert(-1, custom_css)
-        loconotion_custom_js = self.cache_file(Path("bundles/loconotion.js"))
-        custom_script = soup.new_tag(
-            "script", type="text/javascript", src=str(loconotion_custom_js)
-        )
-        soup.body.insert(-1, custom_script)
+    def find_subpages(self, url, soup):
+        log.info(f"Got the target domain as {self.domain}")
 
-    def find_subpages(self, url, soup, hrefDomain):
-        # find sub-pages and clean slugs / links
+        # find sub-pages and clean paths / links
         subpages = []
         parse_links = not self.get_page_config(url).get("no-links", False)
         for a in soup.find_all("a", href=True):
+            # region legacy code may need rework
+            if not parse_links and len(a.find_parents("div", class_="notion-scroller")):
+                # if the page is set not to follow any links, strip the href
+                # do this only on children of .notion-scroller, we don't want
+                # to strip the links from the top nav bar
+                log.debug(f"Stripping link for {a['href']}")
+                del a["href"]
+                a.name = "span"
+                # remove pointer cursor styling on the link and all children
+                for child in [a] + a.find_all():
+                    if child.has_attr("style"):
+                        style = cssutils.parseStyle(child["style"])
+                        style["cursor"] = "default"
+                        child["style"] = style.cssText
+                continue
+            # endregion
+
+            assert parse_links == True
+
             sub_page_href = a["href"]
             if sub_page_href.startswith("/"):
-                sub_page_href = (
-                    f'{hrefDomain}/{a["href"].split("/")[len(a["href"].split("/"))-1]}'
-                )
+                sub_page_href = self.domain + parse_quote_plus(sub_page_href, safe="/")
                 log.info(f"Got this as href {sub_page_href}")
-            if sub_page_href.startswith(hrefDomain):
-                if parse_links or not len(
-                    a.find_parents("div", class_="notion-scroller")
+
+            if not urlsplit(sub_page_href).netloc == self.url_parts.netloc:
+                continue  # do nothing with external domain links
+
+            # if the link is an anchor link,
+            # check if the page hasn't already been parsed
+            if "#" in sub_page_href:
+                sub_page_href_tokens = sub_page_href.split("#")
+                sub_page_href = sub_page_href_tokens[0]
+                a["href"] = f"#{sub_page_href_tokens[-1]}"
+                if (
+                    sub_page_href in self.processed_pages.keys()
+                    or sub_page_href in subpages
                 ):
-                    # if the link is an anchor link,
-                    # check if the page hasn't already been parsed
-                    if "#" in sub_page_href:
-                        sub_page_href_tokens = sub_page_href.split("#")
-                        sub_page_href = sub_page_href_tokens[0]
-                        a["href"] = f"#{sub_page_href_tokens[-1]}"
-                        a["class"] = a.get("class", []) + ["loconotion-anchor-link"]
-                        if (
-                            sub_page_href in self.processed_pages.keys()
-                            or sub_page_href in subpages
-                        ):
-                            log.debug(
-                                f"Original page for anchor link {sub_page_href}"
-                                " already parsed / pending parsing, skipping"
-                            )
-                            continue
-                    else:
-                        extension_in_links = self.config.get("extension_in_links", True)
-                        a["href"] = (
-                            self.get_page_slug(
-                                sub_page_href, extension=extension_in_links
-                            )
-                            if sub_page_href != self.index_url
-                            else ("index.html" if extension_in_links else "")
-                        )
-                    subpages.append(sub_page_href)
-                    log.debug(f"Found link to page {a['href']}")
-                else:
-                    # if the page is set not to follow any links, strip the href
-                    # do this only on children of .notion-scroller, we don't want
-                    # to strip the links from the top nav bar
-                    log.debug(f"Stripping link for {a['href']}")
-                    del a["href"]
-                    a.name = "span"
-                    # remove pointer cursor styling on the link and all children
-                    for child in [a] + a.find_all():
-                        if child.has_attr("style"):
-                            style = cssutils.parseStyle(child["style"])
-                            style["cursor"] = "default"
-                            child["style"] = style.cssText
+                    log.debug(
+                        f"Original page for anchor link {sub_page_href}"
+                        " already parsed / pending parsing, skipping"
+                    )
+                    continue
+            else:
+                extension_in_links = self.config.get("extension_in_links", True)
+                a["href"] = (
+                    self.get_page_path(sub_page_href)
+                    if sub_page_href != self.starting_url
+                    else ("index.html" if extension_in_links else "")
+                )
+            subpages.append(sub_page_href)
+            log.debug(f"Found link to page {a['href']}")
         return subpages
 
     def export_parsed_page(self, url, soup):
         # exports the parsed page
         html_str = str(soup)
-        html_file = self.get_page_path(url) if url != self.index_url else "index.html"
+        html_file = (
+            self.get_page_path(url) if url != self.starting_url else "index.html"
+        )
         if html_file in self.processed_pages.values():
             log.error(
                 f"Found duplicate pages with path '{html_file}' - previous one will be"
@@ -625,7 +630,6 @@ class Parser:
 
     def run(self):
         start_time = time.time()
-        self.processed_pages = {}
         self.parse_page(self.starting_url)
         elapsed_time = time.time() - start_time
         formatted_time = "{:02d}:{:02d}:{:02d}".format(
