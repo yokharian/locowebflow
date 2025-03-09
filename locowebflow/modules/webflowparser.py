@@ -294,9 +294,9 @@ class Parser:
         self.inject_custom_tags("head", soup, custom_injects)
         self.inject_custom_tags("body", soup, custom_injects)
 
-        self.correct_local_references(soup)
-
         subpages = self.find_subpages(url, soup)
+
+        self.correct_local_references(soup)
 
         self.export_parsed_page(url, soup)
         self.parse_subpages(subpages)
@@ -339,6 +339,8 @@ class Parser:
                 "mailto:"
             ):
                 return 0
+            if tag_value == "index.html":
+                tag_value = ""
             element[attr] = f"/{tag_value}"
             return 1
 
