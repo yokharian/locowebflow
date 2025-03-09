@@ -2,8 +2,6 @@
 
 **Loconotion** is a Python script that parses a [Notion.so](https://notion.so) public page (alongside all of its subpages) and generates a lightweight, customizable static site. 
 
-⚠️ *Note*: The project is currently functional but unmaintained and might not be up to date with Notion's latest site structure. Issues will likely not be resolved by me and pull requests are welcome, but you might want to look into alternative projects such as [Notion Snapshot](https://github.com/sueszli/notionSnapshot).
-
 ## But Why?
 
 [Notion](https://notion.so) is a web app where you can create your workspace / personal wiki out of content blocks. It feels good to use, and the results look very pretty - the developers did a great job. Given that it also offers the possibility of making a page (and its sub-pages) public on the web, several people choose to use Notion to manage their personal blog, portfolio, or some simple website. Sadly Notion does not support custom domains: your public pages are stuck in the `notion.so` domain, under long computer-generated URLs.
@@ -104,6 +102,12 @@ page = "https://www.notion.so/Loconotion-Example-Page-03c403f4fdc94cc1b315b9469a
 
 # optionally apply notion's dark mode, remove the line below to use the default light mode
 theme = "dark"
+
+
+# whether or not to add file extenions to generated Notion page links.
+# Set this to 'false' if your web host supports serving pages without
+# extensions (e.g. GitHub Pages)
+extension_in_links = true
 
 ## Global Site Settings ##
 # this [site] table defines override settings for the whole site
@@ -235,18 +239,24 @@ On top of this, the script can take these optional arguments:
 
 - [ ] Customizable navbar breadcrumbs
 - [ ] Dark / light theme toggle
-- [ ] Automated deployments (e.g. Netlify / GitHub pages / Vercel / etc.)
+- [ ] Automated deployements (e.g. Netlify / GitHub pages / Vercel / etc.)
 - [ ] Injectable custom HTML
 - [ ] HTML / CSS / JS minification & images optimization
 - [ ] More advanced custom theming
 
 ## Sites built with Loconotion
 
+- [leonclvt.com](https://leoncvlt.com)
+- [aahnik.dev](https://aahnik.dev)
 - [44px.ru](https://44px.ru)
-- [vincent-maladiere.github.io](https://vincent-maladiere.github.io/)
+- [hotelpal.xyz](https://hotelpal.xyz)
+- [nemunasring.lt](https://nemunasring.lt)
+- [blog.2m.lt](https://blog.2m.lt)
+- [2m.lt](https://2m.lt)
 
 If you used Loconotion to build a cool site and want it added to the list above, shoot me a mail or submit a pull request!
 
 ## Support [![Buy me a coffee](https://img.shields.io/badge/-buy%20me%20a%20coffee-lightgrey?style=flat&logo=buy-me-a-coffee&color=FF813F&logoColor=white "Buy me a coffee")](https://www.buymeacoffee.com/leoncvlt)
 
-If you found this useful, consider [buying me a coffee,](https://www.buymeacoffee.com/leoncvlt) so I get a nice dose of methilxanthine, and you get a nice dose of karma.
+If you found this useful, consider [buying me a coffee](https://www.buymeacoffee.com/leoncvlt) so I get a a nice dose of methilxanthine, and you get a nice dose of karma.
+
