@@ -17,6 +17,8 @@ from urllib.parse import (
     unquote,
 )
 
+import bs4
+
 from locowebflow.modules.conditions import PageLoaded
 
 log = logging.getLogger(f"locowebflow.{__name__}")
@@ -50,6 +52,41 @@ class Parser:
     def domain(self):
         return f"{self.url_parts.scheme}://{self.url_parts.netloc}"
 
+    def init_chromedriver(self):
+        chromedriver_path = self.args.get("chromedriver")
+        if not chromedriver_path:
+            try:
+                chromedriver_path = chromedriver_autoinstaller.install()
+            except Exception as e:
+                log.critical(
+                    f"Failed to install the built-in chromedriver: {e}\n"
+                    "\nDownload the correct version for your system at"
+                    " https://chromedriver.chromium.org/downloads and use the"
+                    " --chromedriver argument to point to the chromedriver executable"
+                )
+                raise e from e
+
+        log.info(f"Initialising chromedriver at {chromedriver_path}")
+        logs_path = Path.cwd() / ".logs" / "webdrive.log"
+        logs_path.parent.mkdir(parents=True, exist_ok=True)
+
+        chrome_options = Options()
+        if not self.args.get("non_headless", False):
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("window-size=1920,20000")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+        chrome_options.add_argument("--log-level=3")
+        chrome_options.add_argument("--silent")
+        chrome_options.add_argument("--disable-logging")
+        ## https://stackoverflow.com/questions/32970855/clear-cache-before-running-some-selenium-webdriver-tests-using-java
+        chrome_options.add_argument("--incognito")
+        chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
+        chrome_options.add_argument(f"--log-path={str(logs_path)}")
+
+        service = Service(str(chromedriver_path))
+        return webdriver.Chrome(options=chrome_options, service=service)
+
     def __init__(self, args=None, config=None):
         self.config = config or {}
         self.args = args or {}
@@ -65,7 +102,7 @@ class Parser:
         # get the site name from the config, or make it up by cleaning the target page's domain
         site_name = self.config.get("name", None)
         if not site_name:  # site name will be domain name
-            site_name = urlparse(starting_url).netloc
+            site_name = urlparse(starting_url).hostname
 
         # set the output folder based on the site name
         self.dist_folder = Path(config.get("output", Path("dist") / site_name))
@@ -153,6 +190,132 @@ class Parser:
             else:
                 return input_url.path
 
+    def correct_local_references(self, soup):
+
+        def _correct_attr(element, attr):
+            tag_value = element[attr]
+            if "http" in tag_value:
+                return 0  # external domain or not a file cached
+            if tag_value.startswith("/") or tag_value.startswith("#"):
+                return 0  # correctly configured element
+            if tag_value.strip().startswith("data:") or tag_value.strip().startswith(
+                "mailto:"
+            ):
+                return 0
+            if tag_value == "index.html":
+                tag_value = ""
+            element[attr] = f"/{tag_value}"
+            return 1
+
+        corrected_references = []
+        for href_element in soup.find_all(href=True):
+            success = _correct_attr(href_element, "href")
+            corrected_references += [href_element] if success else []
+
+        for src_element in soup.find_all(src=True):
+            success = _correct_attr(src_element, "src")
+            corrected_references += [src_element] if success else []
+
+        log.info(
+            f"Corrected local references to {len(corrected_references)} references"
+        )
+
+    def _clean_up_meta_tags(self, soup):
+        for tag in [
+            "description",
+            "twitter:card",
+            "twitter:site",
+            "twitter:title",
+            "twitter:description",
+            "twitter:image",
+            "twitter:url",
+            "apple-itunes-app",
+        ]:
+            unwanted_tag = soup.find("meta", attrs={"name": tag})
+            if unwanted_tag:
+                unwanted_tag.decompose()
+        for tag in [
+            "og:site_name",
+            "og:type",
+            "og:url",
+            "og:title",
+            "og:description",
+            "og:image",
+        ]:
+            unwanted_og_tag = soup.find("meta", attrs={"property": tag})
+            if unwanted_og_tag:
+                unwanted_og_tag.decompose()
+
+    def clean_up(self, url, soup):
+        config = self.get_page_config(url).get("cleanup", {})
+        script_config = config.get("scripts", [])  # type: Dict[str:Any]
+        # TODO: refactor to regex
+        get_domain_name = lambda x: x.hostname if x.scheme else x.path
+        domain_blacklist = (i["domain"] for i in script_config if i.get("domain"))
+        domain_blacklist = map(urlparse, domain_blacklist)
+        domain_blacklist = map(get_domain_name, domain_blacklist)
+        domain_blacklist = set(domain_blacklist)
+        script_blacklist = (i["src"] for i in script_config if i.get("src"))
+        # script_blacklist = (i.replace(urlsplit(i).scheme, "") for i in script_blacklist) # ignore script scheme
+        script_blacklist = set(script_blacklist)
+        should_clean_all: bool = any(i.get("all", False) for i in script_config)
+
+        # remove scripts and other tags we don't want / need
+        for element in soup.find_all("script"):  # type: bs4.element.Tag
+            src = element.get("src")
+
+            if should_clean_all:
+                element.decompose()
+                continue
+
+            for domain in domain_blacklist:
+                if urlparse(src).hostname == domain:
+                    log.debug(f"Cleaning up script src='{src}'")
+                    element.decompose()
+                    continue
+
+            for script in script_blacklist:
+                if src == script:
+                    log.debug(f"Cleaning up script src='{src}'")
+                    element.decompose()
+                    continue
+
+        # needed so we don't cache webflow assets later
+        for unwanted in soup.find_all(class_="w-webflow-badge"):
+            unwanted.decompose()
+
+        # clean up the default meta-tags
+        # self._clean_up_meta_tags(soup)
+
+    def set_custom_meta_tags(self, url, soup):
+        # set custom meta tags
+        custom_meta_tags = self.get_page_config(url).get("meta", [])
+        for custom_meta_tag in custom_meta_tags:
+            tag = soup.new_tag("meta")
+            for attr, value in custom_meta_tag.items():
+                tag.attrs[attr] = value
+            log.debug(f"Adding meta tag {str(tag)}")
+            soup.head.append(tag)
+
+    def sanitize_a_domain_image(self, img):
+        img_src = self.domain + img["src"]
+        # region legacy code
+        # notion's own default images urls are in a weird format, need to sanitize them
+        # img_src = 'https://www.notion.so' + img['src'].split("notion.so")[-1].replace("notion.so", "").split("?")[0]
+        # endregion
+        if not ".amazonaws" in img_src:
+            img_src = unquote(img_src)
+        return img_src
+
+    def get_elements_with_background_image(self, soup):
+        # We go through all the elements that have a style attribute.
+        for element in soup.find_all(style=True):
+            style = cssutils.parseStyle(element["style"])
+            background_image = style.getProperty("background-image")
+            if background_image:
+                if background_image.value.strip().lower().startswith("url"):
+                    yield element
+
     def cache_file(self, url, filename=None, extension=None):
         # stringify the url in case it's a Path object
         url = str(url)
@@ -217,236 +380,12 @@ class Parser:
                     destination = destination.with_suffix(Path(url).suffix)
                     shutil.copyfile(url, destination)
                     return destination.relative_to(self.dist_folder)
+                return None
         # if we already have a matching cached file, return its relative path
         else:
             cached_file = Path(matching_file[0]).relative_to(self.dist_folder)
             log.debug(f"'{url}' was already downloaded")
             return cached_file
-
-    def init_chromedriver(self):
-        chromedriver_path = self.args.get("chromedriver")
-        if not chromedriver_path:
-            try:
-                chromedriver_path = chromedriver_autoinstaller.install()
-            except Exception as e:
-                log.critical(
-                    f"Failed to install the built-in chromedriver: {e}\n"
-                    "\nDownload the correct version for your system at"
-                    " https://chromedriver.chromium.org/downloads and use the"
-                    " --chromedriver argument to point to the chromedriver executable"
-                )
-                raise e from e
-
-        log.info(f"Initialising chromedriver at {chromedriver_path}")
-        logs_path = Path.cwd() / ".logs" / "webdrive.log"
-        logs_path.parent.mkdir(parents=True, exist_ok=True)
-
-        chrome_options = Options()
-        if not self.args.get("non_headless", False):
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("window-size=1920,20000")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-        chrome_options.add_argument("--log-level=3")
-        chrome_options.add_argument("--silent")
-        chrome_options.add_argument("--disable-logging")
-        ## https://stackoverflow.com/questions/32970855/clear-cache-before-running-some-selenium-webdriver-tests-using-java
-        chrome_options.add_argument("--incognito")
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-logging"])
-        chrome_options.add_argument(f"--log-path={str(logs_path)}")
-
-        service = Service(str(chromedriver_path))
-        return webdriver.Chrome(options=chrome_options, service=service)
-
-    def parse_page(self, url: str):
-        """Parse the page at url and write it to file, then recursively parse all subpages.
-
-        Args:
-
-
-        After the page at `url` has been parsed, calls itself recursively for every subpage
-        it has discovered.
-        """
-        log.info(f"Parsing page '{url}'")
-        log.debug(f"Using page config: {self.get_page_config(url)}")
-
-        try:
-            self.load(url)
-        except TimeoutException as e:
-            log.critical(
-                "Timeout waiting for page content to load, or no content found."
-                " Are you sure the page is set to public?"
-            )
-            raise e from e
-
-        # creates soup from the page to start parsing
-        soup = BeautifulSoup(self.driver.page_source, "html5lib")
-
-        self.clean_up(url, soup)
-        self.set_custom_meta_tags(url, soup)
-        self.process_images(soup)
-        self.process_stylesheets(soup)
-        self.process_scripts(soup)
-        self.embed_custom_fonts(url, soup)
-
-        # inject any custom elements to the page
-        custom_injects = self.get_page_config(url).get("inject", {})
-        self.inject_custom_tags("head", soup, custom_injects)
-        self.inject_custom_tags("body", soup, custom_injects)
-
-        subpages = self.find_subpages(url, soup)
-
-        self.correct_local_references(soup)
-
-        self.export_parsed_page(url, soup)
-        self.parse_subpages(subpages)
-
-    def _clean_up_meta_tags(self, soup):
-        for tag in [
-            "description",
-            "twitter:card",
-            "twitter:site",
-            "twitter:title",
-            "twitter:description",
-            "twitter:image",
-            "twitter:url",
-            "apple-itunes-app",
-        ]:
-            unwanted_tag = soup.find("meta", attrs={"name": tag})
-            if unwanted_tag:
-                unwanted_tag.decompose()
-        for tag in [
-            "og:site_name",
-            "og:type",
-            "og:url",
-            "og:title",
-            "og:description",
-            "og:image",
-        ]:
-            unwanted_og_tag = soup.find("meta", attrs={"property": tag})
-            if unwanted_og_tag:
-                unwanted_og_tag.decompose()
-
-    def correct_local_references(self, soup):
-
-        def _correct_attr(element, attr):
-            tag_value = element[attr]
-            if "http" in tag_value:
-                return 0  # external domain or not a file cached
-            if tag_value.startswith("/") or tag_value.startswith("#"):
-                return 0  # correctly configured element
-            if tag_value.strip().startswith("data:") or tag_value.strip().startswith(
-                "mailto:"
-            ):
-                return 0
-            if tag_value == "index.html":
-                tag_value = ""
-            element[attr] = f"/{tag_value}"
-            return 1
-
-        corrected_references = []
-        for href_element in soup.find_all(href=True):
-            success = _correct_attr(href_element, "href")
-            corrected_references += [href_element] if success else []
-
-        for src_element in soup.find_all(src=True):
-            success = _correct_attr(src_element, "src")
-            corrected_references += [src_element] if success else []
-
-        log.info(
-            f"Corrected local references to {len(corrected_references)} references"
-        )
-
-    def clean_up(self, url, soup):
-        config = self.get_page_config(url).get("cleanup", {})
-
-        soup_scripts = soup.find_all("script")
-        # remove scripts and other tags we don't want / need
-        for target_script in config.get("scripts", []):  # type: Dict[str:Any]
-            target_src = target_script["src"]
-            for unwanted in soup_scripts:
-                if unwanted.get("src") == target_src:
-                    unwanted.decompose()
-
-        # needed so we don't cache webflow assets later
-        for unwanted in soup.find_all(class_="w-webflow-badge"):
-            unwanted.decompose()
-
-        # clean up the default meta-tags
-        # self._clean_up_meta_tags(soup)
-
-    def set_custom_meta_tags(self, url, soup):
-        # set custom meta tags
-        custom_meta_tags = self.get_page_config(url).get("meta", [])
-        for custom_meta_tag in custom_meta_tags:
-            tag = soup.new_tag("meta")
-            for attr, value in custom_meta_tag.items():
-                tag.attrs[attr] = value
-            log.debug(f"Adding meta tag {str(tag)}")
-            soup.head.append(tag)
-
-    def sanitize_a_domain_image(self, img):
-        img_src = self.domain + img["src"]
-        # region legacy code
-        # notion's own default images urls are in a weird format, need to sanitize them
-        # img_src = 'https://www.notion.so' + img['src'].split("notion.so")[-1].replace("notion.so", "").split("?")[0]
-        # endregion
-        if not ".amazonaws" in img_src:
-            img_src = unquote(img_src)
-        return img_src
-
-    def get_elements_with_background_image(self, soup):
-        # We go through all the elements that have a style attribute.
-        for element in soup.find_all(style=True):
-            style = cssutils.parseStyle(element["style"])
-            background_image = style.getProperty("background-image")
-            if background_image:
-                if background_image.value.strip().lower().startswith("url"):
-                    yield element
-
-    def process_images(self, soup, cache_backgrounds=True, cache_images=True):
-        for element in self.get_elements_with_background_image(soup):
-            if not cache_backgrounds:
-                break
-            style = cssutils.parseStyle(element["style"])
-            background_image = style["background-image"]
-            image_url = background_image[
-                background_image.find("(") + 1 : background_image.find(")")
-            ]
-            cached_image_url = f"/{self.cache_file(image_url)}"
-
-            style["background-image"] = background_image.replace(
-                image_url, str(cached_image_url)
-            )
-            element["style"] = style.cssText
-
-        for link in soup.find_all("link"):
-            if not link.has_attr("href"):
-                continue
-            link_url = link["href"]
-            if not "favicon" in link_url:
-                continue
-
-            if "data:image" not in link_url:
-                if link_url.startswith("/"):
-                    link_url = self.domain + link_url
-
-                link["href"] = str(self.cache_file(link_url))
-            elif link_url.startswith("/"):
-                link["href"] = self.domain + link_url
-
-        for img in soup.find_all("img"):
-            if not img.has_attr("src"):
-                continue
-            img_src = img["src"]
-            if cache_images and "data:image" not in img_src:
-                # if the path starts with /, it's one of notion's predefined images
-                if img_src.startswith("/"):
-                    img_src = self.sanitize_a_domain_image(img)
-
-                img["src"] = str(self.cache_file(img_src))
-            elif img_src.startswith("/"):
-                img["src"] = self.domain + img_src
 
     def process_scripts(self, soup):
         for script in soup.find_all("script"):
@@ -588,6 +527,30 @@ class Parser:
 
                 soup.find(section).append(injected_tag)
 
+    def export_parsed_page(self, url, soup):
+        # exports the parsed page
+        html_str = str(soup)
+        html_file = (
+            self.get_page_path(url) if url != self.starting_url else "index.html"
+        )
+        html_file = html_file.strip("/")
+        if html_file in self.processed_pages.values():
+            log.error(
+                f"Found duplicate pages with path '{html_file}' - previous one will be"
+                " overwritten. Make sure that your notion pages names or custom paths"
+                " in the configuration files are unique"
+            )
+
+        if html_file != "index.html":
+            target_path = self.dist_folder / html_file
+            target_path.mkdir(parents=True, exist_ok=True)
+            html_file = "/".join(html_file.split("/") + ["index.html"])
+
+        log.info(f"Exporting page '{url}' as '{html_file}'")
+        with open(self.dist_folder / html_file, "wb") as f:
+            f.write(html_str.encode("utf-8").strip())
+        self.processed_pages[url] = html_file
+
     def find_subpages(self, url, soup):
         log.info(f"Got the target domain as {self.domain}")
 
@@ -619,7 +582,7 @@ class Parser:
                 sub_page_href = self.domain + parse_quote_plus(sub_page_href, safe="/")
                 log.info(f"Got this as href {sub_page_href}")
 
-            if not urlsplit(sub_page_href).netloc == self.url_parts.netloc:
+            if not urlsplit(sub_page_href).hostname == self.url_parts.hostname:
                 continue  # do nothing with external domain links
 
             # if the link is an anchor link,
@@ -648,29 +611,92 @@ class Parser:
             log.debug(f"Found link to page {a['href']}")
         return set(subpages)
 
-    def export_parsed_page(self, url, soup):
-        # exports the parsed page
-        html_str = str(soup)
-        html_file = (
-            self.get_page_path(url) if url != self.starting_url else "index.html"
-        )
-        html_file = html_file.strip("/")
-        if html_file in self.processed_pages.values():
-            log.error(
-                f"Found duplicate pages with path '{html_file}' - previous one will be"
-                " overwritten. Make sure that your notion pages names or custom paths"
-                " in the configuration files are unique"
+    def process_images(self, soup, cache_backgrounds=True, cache_images=True):
+        for element in self.get_elements_with_background_image(soup):
+            if not cache_backgrounds:
+                break
+            style = cssutils.parseStyle(element["style"])
+            background_image = style["background-image"]
+            image_url = background_image[
+                background_image.find("(") + 1 : background_image.find(")")
+            ]
+            cached_image_url = f"/{self.cache_file(image_url)}"
+
+            style["background-image"] = background_image.replace(
+                image_url, str(cached_image_url)
             )
+            element["style"] = style.cssText
 
-        if html_file != "index.html":
-            target_path = self.dist_folder / html_file
-            target_path.mkdir(parents=True, exist_ok=True)
-            html_file = "/".join(html_file.split("/") + ["index.html"])
+        for link in soup.find_all("link"):
+            if not link.has_attr("href"):
+                continue
+            link_url = link["href"]
+            if not "favicon" in link_url:
+                continue
 
-        log.info(f"Exporting page '{url}' as '{html_file}'")
-        with open(self.dist_folder / html_file, "wb") as f:
-            f.write(html_str.encode("utf-8").strip())
-        self.processed_pages[url] = html_file
+            if "data:image" not in link_url:
+                if link_url.startswith("/"):
+                    link_url = self.domain + link_url
+
+                link["href"] = str(self.cache_file(link_url))
+            elif link_url.startswith("/"):
+                link["href"] = self.domain + link_url
+
+        for img in soup.find_all("img"):
+            if not img.has_attr("src"):
+                continue
+            img_src = img["src"]
+            if cache_images and "data:image" not in img_src:
+                # if the path starts with /, it's one of notion's predefined images
+                if img_src.startswith("/"):
+                    img_src = self.sanitize_a_domain_image(img)
+
+                img["src"] = str(self.cache_file(img_src))
+            elif img_src.startswith("/"):
+                img["src"] = self.domain + img_src
+
+    def parse_page(self, url: str):
+        """Parse the page at url and write it to file, then recursively parse all subpages.
+
+        Args:
+
+
+        After the page at `url` has been parsed, calls itself recursively for every subpage
+        it has discovered.
+        """
+        log.info(f"Parsing page '{url}'")
+        log.debug(f"Using page config: {self.get_page_config(url)}")
+
+        try:
+            self.load(url)
+        except TimeoutException as e:
+            log.critical(
+                "Timeout waiting for page content to load, or no content found."
+                " Are you sure the page is set to public?"
+            )
+            raise e from e
+
+        # creates soup from the page to start parsing
+        soup = BeautifulSoup(self.driver.page_source, "html5lib")
+
+        self.clean_up(url, soup)
+        self.set_custom_meta_tags(url, soup)
+        self.process_images(soup)
+        self.process_stylesheets(soup)
+        self.process_scripts(soup)
+        self.embed_custom_fonts(url, soup)
+
+        # inject any custom elements to the page
+        custom_injects = self.get_page_config(url).get("inject", {})
+        self.inject_custom_tags("head", soup, custom_injects)
+        self.inject_custom_tags("body", soup, custom_injects)
+
+        subpages = self.find_subpages(url, soup)
+
+        self.correct_local_references(soup)
+
+        self.export_parsed_page(url, soup)
+        self.parse_subpages(subpages)
 
     def parse_subpages(self, subpages):
         # parse sub-pages
