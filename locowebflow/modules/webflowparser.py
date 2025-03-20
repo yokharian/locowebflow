@@ -511,7 +511,7 @@ class Parser:
                         injected_tag[attr] = None if value == "|NONE_VALUE|" else value
 
                     # if the value refers to a file, copy it to the dist folder
-                    if attr.lower() in ["href", "src"]:
+                    if attr.lower() in ["path", "local"]:
                         log.debug(f"Copying injected file '{value}'")
                         if urlparse(value).scheme:
                             path_to_file = value
@@ -519,6 +519,8 @@ class Parser:
                             path_to_file = Path.cwd() / value.strip("/")
                         cached_custom_file = self.cache_file(path_to_file)
                         injected_tag[attr] = str(cached_custom_file)
+                    if attr.lower() in ["href", "src"]:
+                        injected_tag[attr] = str(value)
                 log.debug(f"Injecting <{section}> tag: {injected_tag}")
 
                 # adding `inner_html` as the tag's content
